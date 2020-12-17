@@ -69,6 +69,7 @@ func main() {
 		persistenceFile     = app.Flag("persistence.file", "File to persist metrics. If empty, metrics are only kept in memory.").Default("").String()
 		persistenceInterval = app.Flag("persistence.interval", "The minimum interval at which to write out the persistence file.").Default("5m").Duration()
 		pushUnchecked       = app.Flag("push.disable-consistency-check", "Do not check consistency of pushed metrics. DANGEROUS.").Default("false").Bool()
+		expireSecond        = app.Flag("expire.metric.second", "Delete metric that exceed the specified time").Default("120").Float64()
 		promlogConfig       = promlog.Config{}
 	)
 	promlogflag.AddFlags(app, &promlogConfig)
@@ -177,6 +178,9 @@ func main() {
 		"goVersion": version.GoVersion,
 	}
 
+	cronTask := handler.NewCronTask(logger, ms)
+	cronTask.DeleteExpireMetric(*expireSecond)
+
 	apiv1 := api_v1.New(logger, ms, flags, buildInfo)
 
 	apiPath := "/api"
@@ -192,9 +196,11 @@ func main() {
 
 	mux.Handle(apiPath+"/v1/", http.StripPrefix(apiPath+"/v1", av1))
 
+	cronTask.Start()
 	go closeListenerOnQuit(l, quitCh, logger)
 	err = (&http.Server{Addr: *listenAddress, Handler: mux}).Serve(l)
 	level.Error(logger).Log("msg", "HTTP server stopped", "err", err)
+	cronTask.Stop()
 	// To give running connections a chance to submit their payload, we wait
 	// for 1sec, but we don't want to wait long (e.g. until all connections
 	// are done) to not delay the shutdown.
